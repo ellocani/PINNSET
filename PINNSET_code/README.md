@@ -206,6 +206,7 @@ GATE_DIST 3.0 · ALARM 5.0 · REBASE_RUN 20 · SHRINK_TAU 0.7 · SEG_GAP_S 300�
 모두 `pinnset/config.py`의 `CFG`에서만 바꾼다.
 
 ## 정정 이력
+- 2026-11-20: 코드 구조 정리 — 단계별 파일을 `pinnset/` 패키지로 옮기고(설정 `config.py`, 데이터 `data.py`, 모델 `model.py`, 고정 기준 분석 `analysis.py`, 엄격 검증 `evaluate.py` 등) 실행 스크립트를 `run_all.py`·`run_dashboard.py`·`run_newrecipe.py` 셋으로 정리. 이탈 점수 계산 3벌(일괄·샷별 스트림·다중 레시피)을 `model.Baseline` 하나로, 구간 내 순위·원형 이동·JSON 정리 등 중복 함수를 `stats.py`로 합침. newrecipe의 모듈 바꿔치기를 인자 전달로, CFG 임시 변경을 `config.override`로 바꿈. 쓰이지 않던 변수·상수 제거. 원본 코드와 같은 데이터로 `run_all`·대시보드·`run_newrecipe --fast`를 실행해 `tools/compare_results.py`로 대조: 모든 예측 CSV·수치 JSON 같음, 다른 곳은 결과 안내문 속 파일 이름(예: pinnset_strict.py → evaluate.py)과 실행 시간뿐. 계산 로직·예측·성능 수치 변경 없음.
 - 2026-10-08 (최종 2): 검증 리포트의 구간 AUC 설명을 실제 계산(구간별 순위 백분위 → 전체 ROC-AUC)에 맞춤, 무라벨 경보율과 라벨 양품 오경보율 구분, 2·3장에 '고정 기준 참고 평가' 표시, 재가동 표 표시 이름을 '검사 대기 분리'로 변경. PINN 검증 스크립트가 가중치 누락·검증 실패를 종료 코드 1로 알리도록 수정. JSON의 NaN을 null로 저장. 그림 2 제목의 열확산율 표현 정정. 계산 로직·예측·성능 수치 변경 없음.
 - 2026-10-08 (최종): 텍스트 입출력 encoding="utf-8" 명시, 콘솔 출력 UTF-8 설정, README에 Windows 실행 안내와 예측 파일 용도 구분 추가, 대시보드 대처 문구를 "폐기"에서 "검사 대기 분리"로 정정. 계산 로직·예측·성능 수치 변경 없음(전체 재실행으로 확인).
 - 2026-10-08: README 재현 절차 보강 — 실행 위치·데이터 배치, 목적별 재현 절차(기본 결과 / 확장 실험·대시보드 / PINN 재학습 / 재학습 가중치 검증과 적용) 추가. 코드·결과 변경 없음.
