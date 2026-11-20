@@ -1,5 +1,5 @@
 """
-PINNSET 원인별 대처 분석 (층 4) — PINN 성형 윈도우 지도 위 역설계
+[4] 원인별 대처 분석 (층 4) — PINN 성형 윈도우 지도 위 역설계
 ====================================================================
   C1 shots        CN7 샷 표 + 원인 분류 + 샷별 PINN FLR (학습 가중치 weights/pinn_exp2_map.npz)
   C2 levers       운전점에서 레버 효율: 충진시간·금형온도·용융온도 1단위당 FLR 변화 (PINN 지도 위 수치미분)
@@ -9,35 +9,31 @@ PINNSET 원인별 대처 분석 (층 4) — PINN 성형 윈도우 지도 위 역
   C6 fingerprint  무라벨 재가동에서 '식은 수지 지문'(첫 샷 속도↓·압력↑·다음 샷 회복)과 정지 시간의 관계
 그림 5장 + action_results.json 을 작업 폴더에 저장.
 """
-import os, sys, json
+import json
 import numpy as np, pandas as pd
 from scipy.optimize import brentq
-import sys as _sys
-for _s in (_sys.stdout, _sys.stderr):   # Windows(CP949) 콘솔에서도 기호 출력 오류가 나지 않게
-    try: _s.reconfigure(encoding="utf-8", errors="replace")
-    except Exception: pass
-HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.join(HERE, "weights"))
-from pinn_map import PINN
-import pinnset_risk_v0 as v0
-from pinnset_risk_v0 import CFG
-import make_report as mr                     # 한글 폰트 등록 재사용
+from .config import CFG, B_WINDOW
+from .data import load_labeled, load_unlabeled, read_unlabeled, shot_table
+from .model import reference, select_tier1, dev_scale, deviation, recipe_gate
+from .pinn import PINN, WEIGHTS
+from . import report  # noqa: F401  한글 폰트 등록 재사용
 import matplotlib.pyplot as plt
 
 def shots(path):
-    L = v0.load_labeled(path); parts = L[L.PART_NAME.str.startswith("CN7")]
-    S = v0.shot_table(parts)
-    gmed, gsc = v0.reference(S, CFG["GATE_VARS"]); tmed, tsc = v0.reference(S, CFG["TIER_VARS"])
-    U = v0.load_unlabeled(path); T1, _ = v0.select_tier1(U, "CN7", tmed, tsc); ST = v0.shot_table(T1)
-    scale = {c: v0.dev_scale(ST[c]) for c in CFG["VARS"]}
-    S["D"] = v0.deviation(S, scale, v0.recipe_gate(S, gmed, gsc))
+    L = load_labeled(path); parts = L[L.PART_NAME.str.startswith("CN7")]
+    S = shot_table(parts)
+    gmed, gsc = reference(S, CFG["GATE_VARS"]); tmed, tsc = reference(S, CFG["TIER_VARS"])
+    U = load_unlabeled(path); T1, _ = select_tier1(U, "CN7", tmed, tsc); ST = shot_table(T1)
+    scale = {c: dev_scale(ST[c]) for c in CFG["VARS"]}
+    S["D"] = deviation(S, scale, recipe_gate(S, gmed, gsc))
     R = parts.groupby("TimeStamp").Reason.apply(lambda r: "+".join(sorted(set(r.dropna())))).rename("R")
     S = S.merge(R.reset_index(), on="TimeStamp")
     S["since"] = S.groupby("seg").cumcount() + 1
     S["stop"] = S.TimeStamp.diff().dt.total_seconds().where(S.since == 1).ffill()
-    b_win = S.TimeStamp.between("2020-10-16 05:55", "2020-10-16 05:58") & (S.R != "")
+    b_win = S.TimeStamp.between(*B_WINDOW) & (S.R != "")
     S["cls"] = np.select([S.Tm < 265, S.R == "초기허용불량", b_win, S.R.str.contains("가스"), S.R == ""],
                          ["다른 레시피", "A", "B", "C", "정상"], "U")
-    m = PINN(os.path.join(HERE, "weights", "pinn_exp2_map.npz"))
+    m = PINN(WEIGHTS / "pinn_exp2_map.npz")
     k = S.cls != "다른 레시피"
     S.loc[k, "FLR_pinn"] = [m.flr(r.Tw, r.Filling_Time, r.Tm) for r in S[k].itertuples()]
     return S, m
@@ -159,8 +155,8 @@ def fig_restart(R, out):
 #        다음 샷에서 속도 저하가 절반 이하로 회복. (속도·압력이 같이 내려가면 설정 변경으로 보고 제외)
 def restart_fingerprint(path):
     from scipy.stats import spearmanr, fisher_exact
-    U = pd.read_csv(f"{path}/unlabeled_data.csv", usecols=["TimeStamp", "EQUIP_NAME", "PART_NAME", "PART_FACT_PLAN_DATE",
-                    "PART_FACT_SERIAL", "Max_Injection_Speed", "Max_Injection_Pressure"], parse_dates=["TimeStamp"])
+    U = read_unlabeled(path, ["TimeStamp", "EQUIP_NAME", "PART_NAME", "PART_FACT_PLAN_DATE",
+                              "PART_FACT_SERIAL", "Max_Injection_Speed", "Max_Injection_Pressure"])
     rows = []
     for eq, u in U.groupby("EQUIP_NAME"):
         s = u.sort_values("TimeStamp").drop_duplicates("TimeStamp")
@@ -208,7 +204,3 @@ def run(path, out="."):
     fig_map(S, m, R, out); fig_levers(R, out); fig_speed(S, R, out); fig_restart(R, out); fig_fingerprint(R["재가동_지문"], out)
     json.dump(R, open(f"{out}/action_results.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=str)
     return R
-
-if __name__ == "__main__":
-    import argparse; ap = argparse.ArgumentParser(); ap.add_argument("--data", required=True); ap.add_argument("--out", default=".")
-    a = ap.parse_args(); print(json.dumps(run(a.data, a.out), ensure_ascii=False, indent=1, default=str))

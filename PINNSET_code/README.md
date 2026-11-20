@@ -8,8 +8,8 @@ pip install -r requirements.txt
 python run_all.py --data <데이터 폴더> --out <결과 폴더>
 ```
 - 데이터 폴더: KAMP 사출성형기 AI 데이터셋 원본의 `labeled_data.csv`, `unlabeled_data.csv`
-- 새 레시피·새 수지 적용성 검증(선택, 약 60분, `--fast` 약 30분): `python pinnset_newrecipe.py --data <데이터 폴더> --out <결과 폴더>` → `<결과 폴더>/newrecipe/newrecipe_results.json`
-- 현장 화면 시연(선택, 약 30초): `python make_dashboard.py --data <데이터 폴더> --results <결과 폴더>` → `<결과 폴더>/PINNSET_대시보드.html` (파일 하나, 인터넷 불필요)
+- 새 레시피·새 수지 적용성 검증(선택, 약 60분, `--fast` 약 30분): `python run_newrecipe.py --data <데이터 폴더> --out <결과 폴더>` → `<결과 폴더>/newrecipe/newrecipe_results.json`
+- 현장 화면 시연(선택, 약 30초): `python run_dashboard.py --data <데이터 폴더> --results <결과 폴더>` → `<결과 폴더>/PINNSET_대시보드.html` (파일 하나, 인터넷 불필요)
 - 결과 숫자는 requirements.txt 주석의 검증 버전(scikit-learn 1.8.0 등) 기준이다. 비교용 트리 부스팅(HistGB)은 scikit-learn 버전에 따라 소수점 아래 값이 달라질 수 있다(PINNSET 모델·운영표·예측값은 검증한 환경에서 수치 재현을 확인했다).
 - 리포트 그림의 한글 글꼴: Windows는 맑은 고딕, macOS는 Apple SD 고딕을 자동으로 쓴다. Linux는 `/usr/share/fonts/`, `/usr/local/share/fonts/`, `~/.local/share/fonts/`, `~/.fonts/`에서 나눔고딕 또는 Noto Sans CJK를 찾는다. 없으면 `sudo apt install fonts-nanum`(또는 `fonts-noto-cjk`)로 설치한다.
 - GPU 불필요. 일반 노트북 약 8~12분 (검증 환경 실행 시간은 run_info.json). 난수 시드를 고정했고, 검증한 환경(requirements.txt 주석의 버전)에서 같은 수치가 재현됨을 확인했다.
@@ -47,7 +47,7 @@ PowerShell (`PINNSET_code` 폴더에서):
 $env:PYTHONUTF8="1"
 python -m pip install -r requirements.txt
 python run_all.py --data "../data" --out "results_final_check"
-python make_dashboard.py --data "../data" --results "results_final_check"
+python run_dashboard.py --data "../data" --results "results_final_check"
 ```
 
 명령 프롬프트(cmd)를 쓰면 첫 줄을 `set PYTHONUTF8=1`로 바꾼다. 원본 CSV(`labeled_data.csv`, `unlabeled_data.csv`)를 읽는 방식은 바꾸지 않았다.
@@ -82,8 +82,8 @@ python run_all.py --data "../data" --out "results_reproduced"
 기본 실행이 완료된 후, 같은 데이터와 결과 폴더로 실행한다.
 
 ```bash
-python pinnset_newrecipe.py --data "../data" --out "results_reproduced"
-python make_dashboard.py --data "../data" --results "results_reproduced"
+python run_newrecipe.py --data "../data" --out "results_reproduced"
+python run_dashboard.py --data "../data" --results "results_reproduced"
 ```
 
 - 확장 실험: `results_reproduced/newrecipe/newrecipe_results.json`, `onboarding_frozen.csv`, `onboarding_daily.csv` 및 변형별 예측·요약 파일 생성.
@@ -94,7 +94,7 @@ python make_dashboard.py --data "../data" --results "results_reproduced"
 빠른 확장 실험은 다음 명령으로 실행한다.
 
 ```bash
-python pinnset_newrecipe.py --data "../data" --out "results_reproduced_fast" --fast
+python run_newrecipe.py --data "../data" --out "results_reproduced_fast" --fast
 ```
 
 `--fast`는 엄격 평가의 변형을 `official`, `pinn_auto` 두 가지로 줄인다. 네 가지 변형(`official`, `auto`, `pinn`, `pinn_auto`)의 전체 비교가 필요하면 `--fast`를 사용하지 않는다. 기본 분석, 확장 실험, 대시보드 생성은 모두 `run_all.py` 하나에 포함되어 있지 않으므로 목적에 맞게 위 명령을 순서대로 실행한다.
@@ -145,13 +145,13 @@ python pinn_torch/pinn_torch_train.py --verify-only --out "weights_torch" --ref 
 검증을 통과한 새 가중치로 분석하려면 다음 순서로 적용한다.
 
 1. 현재 `weights/` 폴더 전체를 `weights_original_backup/`처럼 별도 이름으로 백업한다. 이미 같은 이름의 백업이 있으면 새 이름을 사용한다.
-2. `weights_torch/`의 가중치 5개(`pinn_exp1_const.npz`, `pinn_exp2_map.npz`, `pinn_exp3_bi.npz`, `pinn_exp3b_bi.npz`, `pinn_exp4_resin.npz`)를 `weights/`에 복사해 같은 이름의 가중치 파일을 교체한다. 기존 로더 `weights/pinn_map.py`는 유지한다.
+2. `weights_torch/`의 가중치 5개(`pinn_exp1_const.npz`, `pinn_exp2_map.npz`, `pinn_exp3_bi.npz`, `pinn_exp3b_bi.npz`, `pinn_exp4_resin.npz`)를 `weights/`에 복사해 같은 이름의 가중치 파일을 교체한다. 가중치 로더는 `pinnset/pinn.py`다.
 3. 학습·검증 기록은 `weights_torch/`에 보관하고, 기존 제출 결과와 다른 결과 폴더를 지정해 다시 실행한다.
 
 ```bash
 python run_all.py --data "../data" --out "results_retrained"
-python pinnset_newrecipe.py --data "../data" --out "results_retrained"
-python make_dashboard.py --data "../data" --results "results_retrained"
+python run_newrecipe.py --data "../data" --out "results_retrained"
+python run_dashboard.py --data "../data" --results "results_retrained"
 ```
 
 필요한 경우 확장 실험이나 대시보드는 생략할 수 있다. 기존 제출 가중치를 사용하는 재현 결과(`results_reproduced/`)와 새 가중치를 사용하는 결과(`results_retrained/`)를 구분한다. 재학습 후 물리 지도·처방·요청·PINN을 사용하는 확장 실험의 수치는 허용오차 안에서도 달라질 수 있다. 기본 위험점수 모델은 해석식 FLR을 사용한다.
@@ -169,26 +169,41 @@ python pinn_torch/pinn_torch_train.py --exp 1 2 3 3b 4 --quick --out "weights_sm
 `--quick`은 반복 수를 줄이는 동작 확인용이다. 물리 검증 실패가 예상되며, 이 결과를 제출용 가중치로 적용하거나 정규 학습 재현 완료의 근거로 사용하지 않는다.
 
 
-## 흐름 (전처리 → 학습 → 추론 → 결과 생성)
-| 단계 | 파일 | 내용 |
+## 코드 구성 (실행 흐름 순서)
+
+실행 스크립트 3개는 `PINNSET_code/`에, 단계별 코드는 `pinnset/`에 있다. 대괄호 번호는 `run_all.py`의 실행 단계다.
+
+| 실행 | 하는 일 |
+|---|---|
+| `run_all.py` | 기본 분석 [1]~[8] 전체 |
+| `run_dashboard.py` | (별도) 현장 화면 시연 — `pinnset/dashboard.py` |
+| `run_newrecipe.py` | (별도) 새 레시피·새 수지 적용성 — `pinnset/newrecipe.py` |
+
+| 파일 (`pinnset/`) | 단계 | 내용 |
 |---|---|---|
-| 전처리 | `pinnset_risk_v0.py` S1~S5 | 중복 제거, 노즐측 용융온도·금형온도·FLR 계산, 샷 표, 연속 가동 구간, 무라벨 1층 선별, 적용 범위 문 |
-| 학습 | 〃 S6~S7 | 이탈 점수 D, 제품별 보정층 (CN7 공정 이탈 / RG3 캐비티 축소 추정) |
-| 검증 | 〃 S8~S9 | 구간 빼기 검증, 원형 이동 검정, 짝지은 비교 |
-| 추론 | `pinnset_risk_v1.py` | 샷이 들어오는 순서대로 불량확률·위험점수·원인태그·보류사유 (`RiskModel.predict_stream`) |
-| 추가 분석 | `pinnset_extra.py` | 데이터 진단, 일반 ML 비교(F1), 상호작용, FN/FP 조건, 민감도, 보류 규칙, C 단서 재현 검정, 보류 포함 확률 평가, 위치 변수(쿠션) |
-| 대처 | `pinnset_action.py` + `weights/` | PINN 성형 윈도우 지도(학습 가중치) 위 역설계, 레버 효율, 사출속도 창, 재가동 규칙, 무라벨 재가동 지문 |
-| 요청 | `pinnset_request.py` | 데이터 요청 엔진 v2: 사전 고정 결정 질문, 채널별 측정오차, 4단 판정(식별·엉킴·결정·비용), 가정치 격자, A 관측 함수 PINN 교체, 요청 카드·데이터 요청서 자동 생성 |
-| 원인별·적용성 | `pinnset_verify.py` | 원인별 사건 안 AUC·경보 기준별 운영점(E12 예측 사용), 변수 빼기·민감도(고정 기준 참고), 다른 설비·품목 적용성(E11) |
-| 엄격 검증 | `pinnset_strict.py` + `docs/protocol_frozen.md` | 독립 재검증 코드 이식(E12): 전처리까지 학습 구간 안에서 계산하는 시간 순서 평가, 사건 블록 제외, 운영표, 모델 비교, bootstrap, 물리·요청 검산 |
-| PINN 학습 | `pinn_torch/` → 학습 출력 폴더 → `weights/` | PINN 실험 1·2·3·3b·4를 PyTorch로 학습해 가중치(npz)와 학습·검증 기록을 생성. 검증 후 가중치를 `weights/`에 반영하는 절차는 위 3~4절. run_all은 저장된 PINN 가중치로 값만 계산하므로 PyTorch 불필요 (`pinn_torch/README.md`) |
-| 리포트 | `make_report.py` | `PINNSET_검증리포트.html` (0~9장), 요청 엔진이 `PINNSET_데이터요청서.html` 별도 생성 |
-| (별도) 새 레시피·새 수지 | `pinnset_newrecipe.py` (E13) | ① 라벨 없는 레시피 자동 등록: 무라벨 작업오더의 공정 설정 지문을 서로 비교해 레시피를 스스로 묶고(거리 3.0, 300행 이상) 레시피마다 적용 범위 기준·이탈 척도 계산, 샷은 가장 가까운 레시피로 판정 ② PINN FLR 직접 사용: 해석식 대신 학습된 PINN으로 샷별 FLR(이분법) ③ 같은 엄격 평가 틀(pinnset_strict)로 공식·자동·PINN·자동+PINN 비교 ④ 무라벨 전체 설비·품목에 매일 다시 등록하며 판정(정상·재가동 경보율, 판정률) ⑤ 다른 두께·수지에 무차원 변환만으로 PINN 사용 → 실단위 FDM 대조. 기존 결과는 바꾸지 않음 |
-| (별도) 현장 화면 시연 | `make_dashboard.py` | run_all 결과 폴더를 읽어 `PINNSET_대시보드.html` 생성. ① 재생 모드: 엄격 시간 순서 예측을 샷 순서대로 재생(판정·확률·위험점수·원인·근거 z·대처·검사 대기열·데이터 요청), 공식 예측 CSV·운영표와 대조해 다르면 만들지 않음. ② 실시간 모드: 정상 기준에 쓰지 않은 무라벨 실제 운전 기록을 샷마다 입력하면 화면 안의 판정 엔진(RiskModel.step과 같은 계산)이 즉시 판정, 같은 입력의 Python 결과와 자체 대조(2,400샷 불일치 0). 모의 사건 주입은 실제 사건의 변화 비율 사용. ③ CSV 불러오기: 사용자가 넣은 KAMP 형식 CSV를 같은 판정 엔진으로 처리 — 과거 파일 한 번에 처리(전체 무라벨 225MB·79만 행 약 7초), 또는 계속 늘어나는 파일을 1~5초마다 다시 확인해 새 행만 판정(Chrome·Edge). 파일은 브라우저 밖으로 보내지 않음. 기존 결과는 바꾸지 않음 |
+| `config.py` | 공통 | 동결 파라미터 `CFG`, 물성 상수(반두께·열확산율·유리전이·무유동 온도), 라벨 정상 운전점, 검사 예산, 공정 변수 목록 |
+| `data.py` | 공통 (설계도 S1·S2) | 원본 CSV 읽기(무라벨 225MB는 프로세스마다 한 번만), 중복 제거, 노즐측 용융온도·금형온도·FLR 계산, 샷 표, 연속 가동 구간, LH/RH 쌍, 원인 분류 |
+| `model.py` | 공통 (S3~S7) | 기준값, 무라벨 1층 선별, 적용 범위 문, 이탈 점수 D(`Baseline`: 일괄 계산·샷별 스트림이 같은 규칙), 제품별 보정층(CN7 공정 이탈 / RG3 캐비티 축소 추정), 원인 태그, `RiskModel.predict_stream`(샷 순서대로 불량확률·위험점수·원인태그·보류사유) |
+| `stats.py` | 공통 | 구간 내 순위(centered mid-rank), F1·혼동행렬, 원형 이동 귀무분포, JSON 정리 |
+| `analysis.py` | [1][2][3][7] | 고정 기준(참고) 평가: v0 재현·구간 빼기 검증·유의성(S8·S9), v1 일괄=샷별·미래 누설·시간 순서·원인 태그와 부품별 예측 CSV, 추가 분석 E1~E9(진단, 일반 ML 비교·F1, 상호작용, FN/FP, 민감도, 보류 규칙, C 단서 재현, 보류 포함 확률, 위치 변수), 강건성 E10·적용성 E11 |
+| `pinn.py` | [4][5][6] | PINN 가중치(`weights/*.npz`) 불러오기·FLR·지도 계산 (PyTorch 불필요). `python -m pinnset.pinn`으로 기준점 확인 |
+| `action.py` | [4] | PINN 성형 윈도우 지도 위 역설계, 레버 효율, 사출속도 창, 재가동 규칙, 무라벨 재가동 지문 |
+| `request.py` | [5] | 데이터 요청 엔진 v2: 사전 고정 결정 질문, 채널별 측정오차, 4단 판정(식별·엉킴·결정·비용), 가정치 격자, A 관측 함수 PINN 교체, 요청 카드·데이터 요청서 자동 생성 |
+| `evaluate.py` + `docs/protocol_frozen.md` | [6] **공식 성능** | 엄격 검증(E12): 전처리까지 학습 구간 안에서 계산하는 시간 순서 평가, 사건 블록 제외, 운영표, 모델 비교, bootstrap, 물리·요청 검산 |
+| `report.py` | [8] | `PINNSET_검증리포트.html` (0~9장). 데이터 요청서는 `request.py`가 따로 생성 |
+| `dashboard.py` | 별도 | run_all 결과 폴더를 읽어 `PINNSET_대시보드.html` 생성. ① 재생 모드: 엄격 시간 순서 예측을 샷 순서대로 재생(판정·확률·위험점수·원인·근거 z·대처·검사 대기열·데이터 요청), 공식 예측 CSV·운영표와 대조해 다르면 만들지 않음. ② 실시간 모드: 정상 기준에 쓰지 않은 무라벨 실제 운전 기록을 샷마다 입력하면 화면 안의 판정 엔진(RiskModel.step과 같은 계산)이 즉시 판정, 같은 입력의 Python 결과와 자체 대조(2,400샷 불일치 0). 모의 사건 주입은 실제 사건의 변화 비율 사용. ③ CSV 불러오기: 사용자가 넣은 KAMP 형식 CSV를 같은 판정 엔진으로 처리 — 과거 파일 한 번에 처리(전체 무라벨 225MB·79만 행 약 7초), 또는 계속 늘어나는 파일을 1~5초마다 다시 확인해 새 행만 판정(Chrome·Edge). 파일은 브라우저 밖으로 보내지 않음 |
+| `newrecipe.py` | 별도 (E13) | ① 라벨 없는 레시피 자동 등록: 무라벨 작업오더의 공정 설정 지문을 서로 비교해 레시피를 스스로 묶고(거리 3.0, 300행 이상) 레시피마다 적용 범위 기준·이탈 척도 계산, 샷은 가장 가까운 레시피로 판정 ② PINN FLR 직접 사용: 해석식 대신 학습된 PINN으로 샷별 FLR(이분법) ③ 같은 엄격 평가 틀(`evaluate.evaluate_product`)로 공식·자동·PINN·자동+PINN 비교 ④ 무라벨 전체 설비·품목에 매일 다시 등록하며 판정(정상·재가동 경보율, 판정률) ⑤ 다른 두께·수지에 무차원 변환만으로 PINN 사용 → 실단위 FDM 대조 |
+
+| 그 밖의 폴더 | 내용 |
+|---|---|
+| `weights/` | PINN 가중치(npz)와 학습·검증 기록 |
+| `pinn_torch/` | PINN 실험 1·2·3·3b·4를 PyTorch로 학습해 가중치와 학습·검증 기록을 생성. 검증 후 가중치를 `weights/`에 반영하는 절차는 위 3~4절 (`pinn_torch/README.md`) |
+| `tools/csv_feed_sim.py` | 대시보드 'CSV 불러오기 → 실시간 감시' 시연용으로 계속 늘어나는 CSV를 만든다 |
+| `tools/compare_results.py` | 두 결과 폴더의 산출물이 같은지 확인 (`python tools/compare_results.py <기준 결과> <새 결과>`) |
 
 ## 동결 파라미터 (2026-09-29, 결과 보고용으로 고정)
 GATE_DIST 3.0 · ALARM 5.0 · REBASE_RUN 20 · SHRINK_TAU 0.7 · SEG_GAP_S 300초 · TAG_Z 2.0 · PCT_WINDOW 1,000
-모두 `pinnset_risk_v0.py`, `pinnset_risk_v1.py` 맨 위 `CFG`에서만 바꾼다.
+모두 `pinnset/config.py`의 `CFG`에서만 바꾼다.
 
 ## 정정 이력
 - 2026-10-08 (최종 2): 검증 리포트의 구간 AUC 설명을 실제 계산(구간별 순위 백분위 → 전체 ROC-AUC)에 맞춤, 무라벨 경보율과 라벨 양품 오경보율 구분, 2·3장에 '고정 기준 참고 평가' 표시, 재가동 표 표시 이름을 '검사 대기 분리'로 변경. PINN 검증 스크립트가 가중치 누락·검증 실패를 종료 코드 1로 알리도록 수정. JSON의 NaN을 null로 저장. 그림 2 제목의 열확산율 표현 정정. 계산 로직·예측·성능 수치 변경 없음.

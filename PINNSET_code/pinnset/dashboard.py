@@ -1,10 +1,10 @@
 """PINNSET 현장 대시보드 생성 (재생 모드 · 실시간 모드 · CSV 불러오기)
 
-    python make_dashboard.py --data <KAMP 데이터 폴더> --results <결과 폴더>
+    python run_dashboard.py --data <KAMP 데이터 폴더> --results <결과 폴더>
 
 · 공식 성능과 같은 엄격 시간 순서(forward, E12) 조건을 그대로 다시 돌려, 각 샷 시점에 모델이 실제로 알 수 있던
   정보만으로 낸 출력(판정·확률·위험점수·원인태그·변수별 이탈 z·기준값)을 샷 순서대로 모은다.
-  - 폴드마다 pinnset_strict.evaluate_product(forward)와 똑같이 기준(fit_reference)과 보정층(fit_calibration)을 다시 맞추고
+  - 폴드마다 evaluate.evaluate_product(forward)와 똑같이 기준(fit_reference)과 보정층(fit_calibration)을 다시 맞추고
     RiskModel.predict_stream으로 스트림 출력을 받는다. (strict 코드의 parity 검사와 같은 방식)
   - 결과를 results/strict/predictions_forward_{CN7,RG3}.csv(공식값)와 맞춰 보고, 하나라도 다르면 화면을 만들지 않는다.
 · 결과: <결과 폴더>/PINNSET_대시보드.html 파일 하나 (데이터·스크립트 내장, 외부 라이브러리·인터넷 불필요)
@@ -15,25 +15,18 @@
 · 재생·실시간 모드는 시연 화면이며 설비에 연결된 실시간 시스템이 아니다. 모델이 이미 샷 순서 처리 구조(predict_stream)라 PLC·MES 연결 시 같은 화면을 실시간으로 쓸 수 있다.
 """
 from pathlib import Path
-import argparse
 import json
 import re
-import sys
-import sys as _sys
-for _s in (_sys.stdout, _sys.stderr):   # Windows(CP949) 콘솔에서도 기호 출력 오류가 나지 않게
-    try: _s.reconfigure(encoding="utf-8", errors="replace")
-    except Exception: pass
 
 import numpy as np
 import pandas as pd
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE / "weights"))
-import pinnset_risk_v0 as v0
-import pinnset_risk_v1 as v1
-import pinnset_strict as st
+from .config import CFG
+from .data import load_labeled, load_unlabeled, shot_table, pairs_for
+from .model import fit_calibration, prepare_product
+from . import evaluate as st
 
-VARS = list(v0.CFG["VARS"])
+VARS = list(CFG["VARS"])
 ZCOL = ["z_speed", "z_fill", "z_inj", "z_flr"]
 KEY = ["TimeStamp", "PART_NAME"]
 EXPECT = {"CN7": dict(score=3454, held=145, unavailable=375, alarm_parts=20, alarm_defects=10),
@@ -47,9 +40,9 @@ def log(s):
 # ------------------------------------------------------------------ 1. 엄격 forward 재계산
 def recompute(prod, L, U):
     parts = L[L.PART_NAME.str.startswith(prod)].copy()
-    S = v0.shot_table(parts)
+    S = shot_table(parts)
     parts = parts.merge(S[["TimeStamp", "seg"]], on="TimeStamp", validate="many_to_one").sort_values(KEY).reset_index(drop=True)
-    U = U[(U.EQUIP_NAME == v0.CFG["EQUIP"]) & U.PART_NAME.str.startswith(prod)]
+    U = U[(U.EQUIP_NAME == CFG["EQUIP"]) & U.PART_NAME.str.startswith(prod)]
     rows = []
     for seg in sorted(S.seg.unique()):
         testS = S[S.seg == seg]
@@ -65,7 +58,7 @@ def recompute(prod, L, U):
         train = train[np.isfinite(train.D)].copy(); train["gD"] = np.log1p(train.D)
         ready = len(train) > 0 and 0 < train.y.sum() < len(train)
         if ready:
-            b, Lc, spec = v0.fit_calibration(train, st.pairs_for(train), dict(v0.CFG["MODEL"][prod]))
+            b, Lc, spec = fit_calibration(train, pairs_for(train), dict(CFG["MODEL"][prod]))
         else:                               # 보정층 없음: 이탈 z만 보기 위해 임시 계수로 돌리고 확률은 버린다
             b, Lc, spec = np.zeros(1 + int(m.spec["process"])), 0.0, dict(m.spec)
         m.b, m.Lc, m.used = b, Lc, spec
@@ -102,7 +95,7 @@ def merge_and_check(prod, parts, S, R, strict_csv):
     for s in ["score", "held", "unavailable"]:
         assert cnt.get(s, 0) == ex[s], f"{prod} {s}: {cnt.get(s, 0)} != {ex[s]}"
     if prod == "CN7":
-        al = k & M.D.ge(v0.CFG["ALARM"])
+        al = k & M.D.ge(CFG["ALARM"])
         assert al.sum() == ex["alarm_parts"] and M.y[al].sum() == ex["alarm_defects"], (al.sum(), M.y[al].sum())
     log(f"  {prod} 검증 통과: status 일치, D 최대차 {dD:.1e}, 확률 최대차 {dP:.1e}, {cnt}")
     return M, dict(D_max_diff=dD, P_max_diff=dP, counts=cnt)
@@ -164,15 +157,10 @@ LIVE_MODEL_EXPECT = {"CN7": dict(b=[-6.91, 2.59], Lc=0.0), "RG3": dict(b=[-4.07]
 
 
 def final_model(prod, L, U):
-    """현장 투입용 최종 모델 = pinnset_risk_v1.validate의 전체 학습 모델과 같은 절차."""
-    parts = L[L.PART_NAME.str.startswith(prod)].copy()
-    S = v0.shot_table(parts)
-    tmed, tsc = v0.reference(S, v0.CFG["TIER_VARS"])
-    T1, _ = v0.select_tier1(U, prod, tmed, tsc)
-    m = v1.RiskModel(prod); m.set_references(S, v0.shot_table(T1))
-    rec = v0.recipe_gate(S, m.gmed, m.gsc); D = v0.deviation(S, m.scale, rec); held = rec | np.isnan(D)
-    P = parts.merge(S.loc[~held, ["TimeStamp", "seg"]].assign(D=D[~held]), on="TimeStamp"); P["gD"] = np.log1p(P.D)
-    m.fit_calibration(P, st.pairs_for(parts))
+    """현장 투입용 최종 모델 = analysis.run_v1의 전체 학습 모델과 같은 절차."""
+    d = prepare_product(prod, L, U)
+    m, parts, T1 = d["m"], d["parts"], d["T1"]
+    m.fit_calibration(d["P"], d["pairs"])
     ex = LIVE_MODEL_EXPECT[prod]
     assert np.allclose(m.b, ex["b"], atol=.006) and abs(m.Lc - ex["Lc"]) < .006, (m.b, m.Lc)
     return m, parts, T1
@@ -180,9 +168,9 @@ def final_model(prod, L, U):
 
 def live_payload(prod, L, U, injections):
     m, parts, T1 = final_model(prod, L, U)
-    u = U[(U.EQUIP_NAME == v0.CFG["EQUIP"]) & U.PART_NAME.str.startswith(prod)].drop_duplicates(KEY).copy()
+    u = U[(U.EQUIP_NAME == CFG["EQUIP"]) & U.PART_NAME.str.startswith(prod)].drop_duplicates(KEY).copy()
     u["RH"] = u.PART_NAME.str.endswith("RH").astype(int)
-    SU = v0.shot_table(u)
+    SU = shot_table(u)
     start, n = LIVE[prod]
     W = SU[SU.TimeStamp >= pd.Timestamp(start)].head(n).reset_index(drop=True)
     assert len(W) == n
@@ -190,7 +178,7 @@ def live_payload(prod, L, U, injections):
     assert W.TimeStamp.max() < parts.TimeStamp.min(), "입력 구간이 라벨 기간과 겹친다"
     uw = u[u.TimeStamp.isin(set(W.TimeStamp))]
     o = m.predict_stream(W, uw)                       # Python 원본 계산 (브라우저 계산의 정답지)
-    G = v0.CFG["GATE_VARS"]
+    G = CFG["GATE_VARS"]
     shots, exp = [], []
     og = {t: g for t, g in o.groupby("TimeStamp", sort=False)}
     for r in W.itertuples():
@@ -202,7 +190,7 @@ def live_payload(prod, L, U, injections):
         else:
             exp.append(dict(r="", D=float(g.이탈점수.iloc[0]), P=[[float(a), float(b), t] for a, b, t in zip(g.불량확률, g.위험점수, g.원인태그)]))
     cnt = o.drop_duplicates("TimeStamp").판정.value_counts().to_dict()
-    al = o.drop_duplicates("TimeStamp").이탈점수.ge(v0.CFG["ALARM"]).sum()
+    al = o.drop_duplicates("TimeStamp").이탈점수.ge(CFG["ALARM"]).sum()
     log(f"  {prod} 실시간 입력 {W.TimeStamp.min()} ~ {W.TimeStamp.max()} {n}샷, 판정 {cnt}, 경보 {int(al)}샷 (정상 기준 미사용 작업오더, 라벨 기간 이전)")
     model = dict(gmed=[float(m.gmed[c]) for c in G], gsc=[float(m.gsc[c]) for c in G], scale=[float(m.scale[c]) for c in VARS],
                  b=[float(v) for v in m.b], Lc=float(m.Lc), process=bool(m.used["process"]))
@@ -247,9 +235,7 @@ def action_numbers(action):
 
 
 def render(payload, checks, cards, action, live):
-    cfg = dict(ALARM=v0.CFG["ALARM"], TAG_Z=v1.CFG["TAG_Z"], GATE_DIST=v0.CFG["GATE_DIST"], REF_MIN=v0.CFG["REF_MIN"],
-               REF_WIN=v0.CFG["REF_WIN"], REBASE_RUN=v0.CFG["REBASE_RUN"], PCT_WINDOW=v1.CFG["PCT_WINDOW"],
-               EQUIP=v0.CFG["EQUIP"], ALPHA=v0.CFG["ALPHA"], T_NF=v0.CFG["T_NF"], HALF_THICK=v0.CFG["HALF_THICK"])
+    cfg = {k: CFG[k] for k in ["ALARM", "TAG_Z", "GATE_DIST", "REF_MIN", "REF_WIN", "REBASE_RUN", "PCT_WINDOW", "EQUIP", "ALPHA", "T_NF", "HALF_THICK"]}
     js = lambda o: json.dumps(o, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     html = TEMPLATE
     for k, v in [("__DATA__", js(payload)), ("__CARDS__", js(cards)), ("__ACT__", js(action_numbers(action))),
@@ -609,7 +595,7 @@ document.querySelectorAll(".seg-btn").forEach(b=>b.onclick=()=>{stop();prod=b.da
 window.addEventListener("resize",()=>p4());
 document.addEventListener("keydown",e=>{if(MODE==="live"&&e.key!==" ")return;if(e.target.tagName==="INPUT"&&e.key!==" ")return;if(e.key===" "){e.preventDefault();$("play").click();}if(e.key==="ArrowRight"){stop();go(i+1);}if(e.key==="ArrowLeft"){stop();go(i-1);}});
 $("foot").textContent=`데이터 출처: 엄격 시간 순서(forward) 평가를 폴드마다 다시 계산한 스트림 출력(RiskModel.predict_stream). 공식 예측 CSV와 대조 — 이탈 점수 최대 차이 CN7 ${CHK.CN7.D_max_diff.toExponential(1)}, RG3 ${CHK.RG3.D_max_diff.toExponential(1)}; 확률 최대 차이 CN7 ${CHK.CN7.P_max_diff.toExponential(1)}, RG3 ${CHK.RG3.P_max_diff.toExponential(1)}. 각 샷 시점에 모델이 알 수 있던 정보만 표시하고, 실제 불량은 검사 결과 회신(지연 ${DELAY}샷 가정) 뒤에만 표시한다. 키보드: 스페이스 재생/정지, ←/→ 한 샷 이동.`;
-// ================= 실시간 모드: 브라우저 안의 판정 엔진 (pinnset_risk_v1.RiskModel.step과 같은 계산) =================
+// ================= 실시간 모드: 브라우저 안의 판정 엔진 (model.RiskModel.step과 같은 계산) =================
 const REPLAY_FOOT=$("foot").textContent;
 function med(a){const b=a.slice().sort((x,y)=>x-y),n=b.length,h=n>>1;return n%2?b[h]:(b[h-1]+b[h])/2;}
 function tagRule(z,D,rh,pr){if(D>=CFG.ALARM){const t=CFG.TAG_Z;const slow=z[0]<=-t||z[1]>=t||z[3]>=t,fast=z[0]>=t||z[1]<=-t||z[3]<=-t;
@@ -857,7 +843,7 @@ function p5file(s){const P=FS.P[prod],t=P.st,lab=FS.labels&&t.lab>0;
  pend.slice(0,8).forEach(o=>{const [kt,kc]=kind(o.t,o.p);const yb=o.p.y==null?"":o.p.y?` <span class="badge b-red">불량</span>`:` <span class="badge b-ok">양품</span>`;h+=`<li><span class="tm">${o.t.t} ${o.p.n}</span><span><span class="badge ${kc}">${kt}</span>${yb}</span><span class="num">${o.t.s==="score"?pct(o.p.p):"–"}</span></li>`;});
  if(!pend.length)h+=`<li style="grid-template-columns:1fr;color:var(--sub)">검사 대상 없음 — 정상 생산 계속</li>`;
  $("p5").innerHTML=h+`</ul>${pend.length>8?`<div class="more">외 ${pend.length-8}건</div>`:""}`;}
-function setFileFoot(){$("foot").textContent=`파일 모드: 넣은 CSV(KAMP 사출 데이터 형식)를 실시간 모드와 같은 판정 엔진(pinnset_risk_v1.RiskModel.step을 옮긴 것, 현장 투입용 최종 모델)으로 처리한다. 행 → 파생값(용융온도 Tm = 배럴 1~3 평균, 금형온도 Tw = 금형 3·4 평균, FLR(고화층 비율) 해석식) → 같은 시각 행을 한 샷으로 묶음 → 샷마다 판정. 파일은 브라우저 안에서만 읽고 어디로도 보내지 않는다. 실시간 감시는 Chrome·Edge에서 같은 파일을 주기적으로 다시 확인해 새로 붙은 행만 읽는다(파일이 통째로 다시 쓰이면 이미 판정한 시각 이후 행만 반영). 같은 시각의 LH·RH 행이 모두 들어올 때까지 한 샷은 다음 행을 기다리며, 일정 시간 새 행이 없으면 그대로 판정한다.`;}
+function setFileFoot(){$("foot").textContent=`파일 모드: 넣은 CSV(KAMP 사출 데이터 형식)를 실시간 모드와 같은 판정 엔진(model.RiskModel.step을 옮긴 것, 현장 투입용 최종 모델)으로 처리한다. 행 → 파생값(용융온도 Tm = 배럴 1~3 평균, 금형온도 Tw = 금형 3·4 평균, FLR(고화층 비율) 해석식) → 같은 시각 행을 한 샷으로 묶음 → 샷마다 판정. 파일은 브라우저 안에서만 읽고 어디로도 보내지 않는다. 실시간 감시는 Chrome·Edge에서 같은 파일을 주기적으로 다시 확인해 새로 붙은 행만 읽는다(파일이 통째로 다시 쓰이면 이미 판정한 시각 이후 행만 반영). 같은 시각의 LH·RH 행이 모두 들어올 때까지 한 샷은 다음 행을 기다리며, 일정 시간 새 행이 없으면 그대로 판정한다.`;}
 function selectProd(p,silent){prod=p;document.querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("on",x.dataset.p===p));}
 $("fpick").onclick=()=>$("ffile").click();$("fdrop").onclick=()=>$("ffile").click();
 $("ffile").onchange=e=>{const f=e.target.files[0];if(f)openFile(f,false);e.target.value="";};
@@ -887,9 +873,9 @@ def build(data, results, out=None):
     data, results = Path(data).resolve(), Path(results).resolve()
     out = Path(out) if out else results / "PINNSET_대시보드.html"
     log("[대시보드] 데이터 읽기")
-    L, U = v0.load_labeled(str(data)), v0.load_unlabeled(str(data))
+    L, U = load_labeled(str(data)), load_unlabeled(str(data))
     payload, checks = {}, {}
-    for prod in v0.CFG["PRODUCTS"]:
+    for prod in CFG["PRODUCTS"]:
         log(f"[대시보드] {prod} 엄격 시간 순서 폴드 재계산")
         parts, S, R = recompute(prod, L, U)
         M, chk = merge_and_check(prod, parts, S, R, results / "strict" / f"predictions_forward_{prod}.csv")
@@ -907,7 +893,7 @@ def build(data, results, out=None):
         payload[prod] = shots; checks[prod] = chk
     log("[대시보드] 실시간 모드 입력 준비 (최종 모델 + 무라벨 실데이터)")
     inj = injection_ratios(payload["CN7"])
-    live = {prod: live_payload(prod, L, U, inj) for prod in v0.CFG["PRODUCTS"]}
+    live = {prod: live_payload(prod, L, U, inj) for prod in CFG["PRODUCTS"]}
     for prod in live:
         checks[prod]["live"] = dict(range=live[prod]["range"], counts=live[prod]["counts"], alarms=live[prod]["alarms"])
     action = json.loads((results / "action_results.json").read_text(encoding="utf-8"))
@@ -916,10 +902,3 @@ def build(data, results, out=None):
     (results / "dashboard_checks.json").write_text(json.dumps(checks, ensure_ascii=False, indent=1, default=float), encoding="utf-8")
     log(f"[대시보드] 완료: {out} ({out.stat().st_size/1e6:.1f} MB)")
     return out
-
-
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--data", required=True); ap.add_argument("--results", default="results"); ap.add_argument("--out", default=None)
-    a = ap.parse_args()
-    build(a.data, a.results, a.out)

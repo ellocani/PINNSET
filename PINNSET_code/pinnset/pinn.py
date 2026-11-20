@@ -1,6 +1,7 @@
 """
 PINN 성형 윈도우 지도 — 학습된 가중치 불러오기와 지도 계산
 (학습: pinn_torch/pinn_torch_train.py, PyTorch 2.11·float64. 여기서는 학습된 가중치로 값만 계산하므로 PyTorch 불필요)
+가중치 파일은 PINNSET_code/weights/ 에 있다 (WEIGHTS).
 ================================================================
 가중치
   pinn_exp2_map.npz   : 실험 2. 온도에 따라 변하는 열확산율(ASA: 유리 0.115 → 용융 0.080 mm²/s, Tg 105℃)
@@ -28,13 +29,12 @@ FLR = 고화층 두께 / 반두께 = 벽에서부터 θ가 θ_nf = (110 − 금�
   라벨 운전점(금형 22.8℃, 용융 275.5℃, 충진 4.45초): 실험 2 FLR 0.1763 (FDM 0.1751), 실험 1 FLR 0.1722 (푸리에 급수 정답 0.1726)
   FDM 대비 FLR 오차: 중앙 0.0009, 최대 0.0021 (금형 20~80℃, 1.5~8초, 15개 조건)
 """
+from pathlib import Path
 import numpy as np
-import sys as _sys
-for _s in (_sys.stdout, _sys.stderr):   # Windows(CP949) 콘솔에서도 기호 출력 오류가 나지 않게
-    try: _s.reconfigure(encoding="utf-8", errors="replace")
-    except Exception: pass
+from .config import HALF_THICK as H_MM, ALPHA as A_MELT, T_GLASS, T_NF, T_MELT_REF
 
-H_MM, A_MELT, T0, T1 = 4.37 / 2, 0.080, 0.002, 0.65
+WEIGHTS = Path(__file__).resolve().parent.parent / "weights"
+T0, T1 = 0.002, 0.65
 TREF = H_MM ** 2 / A_MELT
 LG = np.log(T1 / T0)
 
@@ -66,10 +66,10 @@ class PINN:
 
     def temperature(self, x_mm, t_sec, T_mold, T_melt):
         """실단위 온도(℃)"""
-        g = (105 - T_mold) / (T_melt - T_mold) if self.n_in >= 3 else None
+        g = (T_GLASS - T_mold) / (T_melt - T_mold) if self.n_in >= 3 else None
         return T_mold + (T_melt - T_mold) * self.theta(np.asarray(x_mm) / H_MM, t_sec, g)
 
-    def flr(self, T_mold, t_fill, T_melt=275.5, n=801, Tg=105.0, Tnf=110.0, ratio=None, half_mm=H_MM, a_melt=A_MELT):
+    def flr(self, T_mold, t_fill, T_melt=T_MELT_REF, n=801, Tg=T_GLASS, Tnf=T_NF, ratio=None, half_mm=H_MM, a_melt=A_MELT):
         """고화층 비율 FLR (0~1). 기본값 = 본 과제 ASA 부품. 다른 수지·두께는 Tg·Tnf·half_mm·a_melt(·ratio, 실험 4)만 바꿔 넣는다"""
         x = np.linspace(0, 1, n)
         g = (Tg - T_mold) / (T_melt - T_mold) if self.n_in >= 3 else None
@@ -79,12 +79,12 @@ class PINN:
         i = int(np.argmax(th >= nf))
         return 0.0 if i == 0 else float(np.interp(nf, [th[i - 1], th[i]], [x[i - 1], x[i]]))
 
-    def flr_map(self, T_molds, t_fills, T_melt=275.5):
+    def flr_map(self, T_molds, t_fills, T_melt=T_MELT_REF):
         """지도: 행 = 충진시간, 열 = 금형온도"""
         return np.array([[self.flr(Tw, tf, T_melt) for Tw in T_molds] for tf in t_fills])
 
 if __name__ == "__main__":
-    m2, m1 = PINN("pinn_exp2_map.npz"), PINN("pinn_exp1_const.npz")
+    m2, m1 = PINN(WEIGHTS / "pinn_exp2_map.npz"), PINN(WEIGHTS / "pinn_exp1_const.npz")
     print(f"라벨 운전점 FLR: 실험2 {m2.flr(22.8, 4.45):.4f} (기대 0.1763) | 실험1 {m1.flr(22.8, 4.45):.4f} (기대 0.1722)")
     print(f"FDM 대조점 (금형 50℃, 4.45초): {m2.flr(50, 4.45):.4f} (PINN 기록 0.1322, FDM 0.1324)")
     print(f"FDM 대조점 (금형 80℃, 8초):    {m2.flr(80, 8.0):.4f} (PINN 기록 0.1012, FDM 0.1007)")

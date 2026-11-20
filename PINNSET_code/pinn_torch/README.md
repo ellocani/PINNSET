@@ -17,7 +17,7 @@ CPU 기준 소요(학습 기록): 실험 1 약 8분, 실험 2 약 10분, 실험 
 ## 산출물 (--out 폴더)
 | 파일 | 내용 |
 |---|---|
-| pinn_exp1_const.npz | 실험 1 가중치 (물성 일정) → `weights/pinn_map.py`·제출 코드가 읽음 |
+| pinn_exp1_const.npz | 실험 1 가중치 (물성 일정) → `pinnset/pinn.py`·제출 코드가 읽음 |
 | pinn_exp2_map.npz | 실험 2 가중치 (온도 의존 물성, 성형 윈도우 지도) |
 | pinn_exp3_bi.npz, pinn_exp3b_bi.npz | 실험 3·3b 가중치 + 역산 log(Bi) |
 | pinn_exp4_resin.npz | 실험 4 가중치 (입력 4개: 위치·시간·θg·열확산율 비 r) |

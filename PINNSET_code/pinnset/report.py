@@ -1,13 +1,9 @@
-"""결과 JSON들을 읽어 PINNSET_검증리포트.html 한 파일로 만든다 (그림은 파일 안에 포함)"""
+"""[8] 리포트 — 결과 JSON들을 읽어 PINNSET_검증리포트.html 한 파일로 만든다 (그림은 파일 안에 포함)"""
 import json, base64, io, os
 import numpy as np, pandas as pd
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
-import sys as _sys
-for _s in (_sys.stdout, _sys.stderr):   # Windows(CP949) 콘솔에서도 기호 출력 오류가 나지 않게
-    try: _s.reconfigure(encoding="utf-8", errors="replace")
-    except Exception: pass
 
 KFONT_FILES = ["C:/Windows/Fonts/malgun.ttf", "/System/Library/Fonts/AppleSDGothicNeo.ttc", "/Library/Fonts/AppleGothic.ttf",
                "/System/Library/Fonts/Supplemental/AppleGothic.ttf"]
@@ -68,7 +64,7 @@ def build(d="."):
     # ---------------- 요약
     rows = []
     for p in ["CN7", "RG3"]:
-        o = v0[p]; t = v1[p]["3_시간순서"]
+        o = v0[p]
         cm = {(r["product"], r["mode"], r["model"]): r for r in json.load(open(f"{d}/strict/comparisons.json", encoding="utf-8"))} if os.path.exists(f"{d}/strict/comparisons.json") else {}
         f_ = cm.get((p, "forward", "PINNSET"), {}); l_ = cm.get((p, "leave_block_out", "PINNSET"), {})
         rows.append({"제품": p, "사건 블록 제외 구간 AUC (공식)": l_.get("AUC_within_segment"), "사건 블록 제외 Brier 개선": l_.get("Brier_improvement"),
@@ -224,6 +220,3 @@ def build(d="."):
         if os.path.exists(f"{sd}/restart_comparison.json"): H += ["<h3>재가동 정책 (같은 재가동 대상)</h3>", tbl(json.load(open(f"{sd}/restart_comparison.json", encoding="utf-8")))]
     H += ["</body></html>"]
     open(f"{d}/PINNSET_검증리포트.html", "w", encoding="utf-8").write("\n".join(H))
-
-if __name__ == "__main__":
-    import sys; build(sys.argv[1] if len(sys.argv) > 1 else ".")

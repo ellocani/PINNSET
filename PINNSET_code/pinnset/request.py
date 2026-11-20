@@ -1,5 +1,5 @@
 """
-PINNSET 층 5 — 데이터 요청 엔진 v2 (2026-09-30)
+[5] 데이터 요청 엔진 v2 (층 5) (2026-09-30)
 =================================================
 v1 프로토타입(request_engine.py)의 결함 5가지를 고친 버전.
   1. 측정오차를 관측 채널마다 따로 넣는다 (계측기 사양, 모르면 범위로 스윕)
@@ -11,14 +11,12 @@ PINN 연결: (단계 1) A의 정상 고화층 비율 FLR0, (단계 2) A의 관�
 
 [사전 고정] 아래 DECISIONS, SIGMA, 격자는 계산 결과를 보기 전에 정했다(2026-09-30). 결과를 보고 바꾸지 않는다.
 """
-import os, sys, json
+import json
 import numpy as np, pandas as pd
 from scipy.stats import norm
-import sys as _sys
-for _s in (_sys.stdout, _sys.stderr):   # Windows(CP949) 콘솔에서도 기호 출력 오류가 나지 않게
-    try: _s.reconfigure(encoding="utf-8", errors="replace")
-    except Exception: pass
-HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.join(HERE, "weights"))
+from .config import T_MOLD_REF, FILL_REF, T_MELT_REF
+from .pinn import PINN, WEIGHTS
+from .stats import json_safe
 
 # ============================================================ 사전 고정: 결정 질문과 판정 기준
 DECISIONS = {
@@ -45,20 +43,9 @@ SIGMA = {
 # 실행해 보니 C(결정 대상이 '저항비'라는 조합 하나)에서 두 저항의 엉킴은 결정과 무관했다(비율의 불확실성은 ③에서 공분산으로 이미 반영).
 # 그래서 ②는 결정이 '두 값을 따로 가르는 것'인 원인(A)에만 적용하는 '수정 판정'을 추가한다. 사전 판정도 함께 보고한다.
 RHO_APPLIES = {"C": False, "A": True}
-COST = {"A": "A급 (기록만 켜면 됨)", "B": "B급 (문서·계획 실험)", "C": "C급 (센서 설치)"}
 TIER_ORDER = {"A": 0, "B": 1, "C": 2}
 
 # ============================================================ 공통 계산
-
-def _json_safe(o):
-    """NaN·무한대를 null로 바꿔 엄격한 JSON 파서에서도 읽히게 한다"""
-    import math
-    if isinstance(o, dict): return {k: _json_safe(v) for k, v in o.items()}
-    if isinstance(o, (list, tuple)): return [_json_safe(v) for v in o]
-    if isinstance(o, float) and not math.isfinite(o): return None
-    if hasattr(o, "item") and getattr(o, "ndim", 1) == 0:
-        v = o.item(); return None if isinstance(v, float) and not math.isfinite(v) else v
-    return o
 
 def jacobian(f, th, rel=1e-6):
     th = np.asarray(th, float); y0 = f(th); J = np.zeros((len(y0), len(th)))
@@ -105,7 +92,6 @@ def C_power(res, ratio):
 
 def run_C():
     rows = []; grid = [(r, sw, sp) for r in [1.05, 1.1, 1.2, 1.3, 1.5] for sw in SIGMA["중량비"] for sp in SIGMA["캐비티압력"]]
-    base = {}
     for r, sw, sp in grid:
         th, cases = C_cases(30, r, sw, sp)
         for name, (f, sig, tier, lead) in cases.items():
@@ -128,9 +114,7 @@ def run_C():
 TAU, K = 2.9, np.arange(6); EA, RG, T0 = 52_000, 8.314, 548.0       # ASA 겉보기 활성화에너지, 기준 용융온도(K)
 
 def FLR0_from_pinn():
-    from pinn_map import PINN
-    m = PINN(os.path.join(HERE, "weights", "pinn_exp2_map.npz"))
-    return float(m.flr(22.8, 4.45, 275.5))                          # 정상 운전점 (금형 22.8℃, 충진 4.45초, 용융 275.5℃)
+    return float(_pinn().flr(T_MOLD_REF, FILL_REF, T_MELT_REF))       # 정상 운전점 (금형 22.8℃, 충진 4.45초, 용융 275.5℃)
 
 def A_cases(flr0, sT):
     def resist(t):
@@ -181,15 +165,14 @@ def run_A_need(flr0):
 #   관측 = 유동저항비 R_k = 점도항(ΔT_k) × ((1 − FLR0)/(1 − FLR_k))^3
 # 입력(실측): 10-27 재가동 6샷 (A 불량 5샷 + 복귀 1샷)의 충진시간과 금형온도 (labeled_data, 00:56~01:07)
 # 판정 기준: 사전 고정 A 기준을 그대로 사용 (|ρ| < 0.9, ΔT 상대 불확실성 < 25%). 격자·센서 오차도 계산 전 고정.
-A_SHOTS = dict(tf=np.array([8.27, 5.72, 6.37, 4.87, 4.58, 4.52]), Tw=np.array([21.05, 21.20, 21.15, 21.35, 21.25, 21.30]), Tm=275.5)
+A_SHOTS = dict(tf=np.array([8.27, 5.72, 6.37, 4.87, 4.58, 4.52]), Tw=np.array([21.05, 21.20, 21.15, 21.35, 21.25, 21.30]), Tm=T_MELT_REF)
 GRID_A2 = dict(ΔT0=[5, 10, 19, 30], ΔTs0=[0.5, 1, 2, 4], 센서오차K=[0.5, 1.0, 2.0])
 _PINN = None
 
 def _pinn():
     global _PINN
     if _PINN is None:
-        from pinn_map import PINN
-        _PINN = PINN(os.path.join(HERE, "weights", "pinn_exp2_map.npz"))
+        _PINN = PINN(WEIGHTS / "pinn_exp2_map.npz")
     return _PINN
 
 def A2_obs_resist(t, flr0):
@@ -272,7 +255,8 @@ QUAL = [
 
 # ============================================================ 실행
 def run(out="."):
-    import make_report as mr; import matplotlib.pyplot as plt
+    from . import report  # noqa: F401  한글 폰트 등록 재사용
+    import matplotlib.pyplot as plt
     dfC, repC, needC = run_C(); dfA, flr0 = run_A(); B = run_B(); needA = run_A_need(flr0); dfA2, flr_delay = run_A2()
     C7 = run_C_cn7(f"{out}/risk_v0_results.json", f"{out}/predictions_CN7.csv")
     def summ(df, ok_col):
@@ -322,15 +306,9 @@ def run(out="."):
              A_PINN_대표값=dfA2[(dfA2.ΔT0 == 19) & (dfA2.ΔTs0 == 1) & ((dfA2.센서오차K == 1.0) | dfA2.센서오차K.isna())][["후보", "엉킴", "ΔT불확실성", "ΔTs불확실성K", "결정가능"]].to_dict("records"),
              A_PINN_충진지연FLR=[float(x) for x in flr_delay],
              A_모델비교="주 모델 = PINN 관측 함수(고화층을 충진시간·금형 표면·수지 온도로 계산). 손 수식(Δδ를 자유 미지수로 둠)은 대조. 공통 결론: 노즐 단독 불충분, 금형 쪽 측정 필요", B=B, C_CN7통계=C7, 수정사유="② 엉킴 기준은 결정이 두 값을 따로 가르는 원인(A)에만 적용 (결과를 본 뒤 수정, 사전 판정 병기)", 요청카드=cd.reset_index().rename(columns={"index": "순위"}).to_dict("records"))
-    json.dump(_json_safe(R), open(f"{out}/request_results.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=lambda x: None if x is None or (isinstance(x, float) and np.isinf(x)) else str(x), allow_nan=False)
+    json.dump(json_safe(R), open(f"{out}/request_results.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=lambda x: None if x is None or (isinstance(x, float) and np.isinf(x)) else str(x), allow_nan=False)
     write_cards(R, out)
     return R
-
-if __name__ == "__main__":
-    import argparse; ap = argparse.ArgumentParser(); ap.add_argument("--out", default="."); a = ap.parse_args()
-    sys.path.insert(0, HERE); R = run(a.out)
-    print(json.dumps({k: R[k] for k in ["PINN_FLR0", "C_필요샷수_최악조건", "A_PINN_센서오차별", "A_PINN_대표값", "C_CN7통계"]}, ensure_ascii=False, indent=1, default=str))
-    print(pd.DataFrame(R["요청카드"]).to_string())
 
 # ============================================================ 단계 3: 요청서 자동 생성 (요청 카드 + 실행 계획)
 # 카드 세부 내용(무엇·얼마나·판정 후 행동·선행 조건)은 요청 이름 앞부분으로 찾는다. 정량 수치는 request_results.json에서 가져온다.
@@ -388,7 +366,7 @@ def write_cards(R, out="."):
            ".small{font-size:12px;color:#666}")
     H = [f"<html><head><meta charset='utf-8'><title>PINNSET 데이터 요청서</title><style>{css}</style></head><body>",
          "<h1>PINNSET 데이터 요청서</h1>",
-         "<p class='small'>pinnset_request.py가 request_results.json에서 자동 생성. 정량 판정 = 야코비안 식별성(4단 판정), 실험 설계, 검정력. "
+         "<p class='small'>request.py가 request_results.json에서 자동 생성. 정량 판정 = 야코비안 식별성(4단 판정), 실험 설계, 검정력. "
          "정렬 = 정량 통과 → 정성 → 미통과, 같은 묶음 안에서 비용 등급(A→B→C) → 기간. 격자 통과 비율은 명시한 가정·오차 격자에서 기준을 넘은 비율이며 실제 성공 확률이 아니다.</p>", "<h2>1. 실행 계획</h2>"]
     for ph, lo, hi in PHASES:
         items = [c for c in cards if lo <= int(c["lead"]) <= hi and c["통과"] is not False]

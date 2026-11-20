@@ -30,10 +30,12 @@
 
 | 파일 | 역할 |
 | --- | --- |
-| [pinnset_risk_v1.py](PINNSET_code/pinnset_risk_v1.py) | 샷 단위 순차 판정과 불량 확률 |
-| [pinnset_strict.py](PINNSET_code/pinnset_strict.py) | 시간순·사건 블록 제외 평가와 모델 비교 |
+| [pinnset/model.py](PINNSET_code/pinnset/model.py) | 샷 단위 순차 판정과 불량 확률 |
+| [pinnset/evaluate.py](PINNSET_code/pinnset/evaluate.py) | 시간순·사건 블록 제외 평가와 모델 비교 |
 | [pinn_torch/](PINNSET_code/pinn_torch/) | 온도장과 고화층 추정을 위한 PINN 학습 실험 |
-| [pinnset_action.py](PINNSET_code/pinnset_action.py) · [pinnset_request.py](PINNSET_code/pinnset_request.py) | 공정 대응 후보 비교와 추가 측정 제안 |
+| [pinnset/action.py](PINNSET_code/pinnset/action.py) · [pinnset/request.py](PINNSET_code/pinnset/request.py) | 공정 대응 후보 비교와 추가 측정 제안 |
+
+파일별 역할과 실행 순서는 [코드 구성](PINNSET_code/README.md#코드-구성-실행-흐름-순서)에 있습니다.
 
 ## 재현
 

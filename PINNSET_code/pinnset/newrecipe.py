@@ -1,7 +1,7 @@
 """PINNSET 새 레시피·새 수지 적용성 검증 (E13, 별도 실행) — 2026-10-07
 
-    python pinnset_newrecipe.py --data <KAMP 데이터 폴더> --out results            # 전체 (약 60분)
-    python pinnset_newrecipe.py --data <KAMP 데이터 폴더> --out results --fast     # 엄격 평가는 공식·자동+PINN 2가지만 (약 30분)
+    python run_newrecipe.py --data <KAMP 데이터 폴더> --out results            # 전체 (약 60분)
+    python run_newrecipe.py --data <KAMP 데이터 폴더> --out results --fast     # 엄격 평가는 공식·자동+PINN 2가지만 (약 30분)
 
 질문: 새 레시피(또는 새 설비·품목)가 들어오면, 라벨 없이 적은 공정 변수만으로 위험점수 모델이 자동으로 준비되는가?
      수지 물성이 바뀌면 PINN이 FLR을 직접 계산해 쓸 수 있는가?
@@ -13,7 +13,7 @@
 ② PINN FLR 직접 사용 (pinn)
    위험점수 모델의 FLR을 반무한·물성 일정 해석식 대신 학습된 PINN(실험 2, 온도 의존 열확산율)으로 샷마다 계산한다(이분법).
    PINN 학습 범위(θg 0.10~0.40, 시간 0.12~38.8초) 밖 행은 해석식을 그대로 쓴다.
-③ 엄격 평가 비교: pinnset_strict.evaluate_product를 그대로 쓰고 기준 설정(fit_reference)과 FLR 계산만 바꾼다
+③ 엄격 평가 비교: evaluate.evaluate_product를 그대로 쓰고 기준 설정(fit_reference)과 FLR 계산만 바꾼다
    (official / auto / pinn / pinn_auto). 동결 파라미터·보정층·평가 방식은 그대로.
 ④ 무라벨 전체 설비·품목: 앞 절반 기간으로 레시피를 등록하고 뒤 절반을 샷 순서대로 판정(frozen), 또는 매일 0시에
    그때까지의 기록으로 다시 등록(daily). 판정률·처음 보는 레시피 보류율·정상 운전 경보율·재가동 직후 경보율.
@@ -23,20 +23,17 @@
 """
 from pathlib import Path
 import argparse, json, subprocess, sys, time
-import sys as _sys
-for _s in (_sys.stdout, _sys.stderr):   # Windows(CP949) 콘솔에서도 기호 출력 오류가 나지 않게
-    try: _s.reconfigure(encoding="utf-8", errors="replace")
-    except Exception: pass
 
 import numpy as np
 import pandas as pd
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE / "weights"))
-import pinnset_risk_v0 as v0
-import pinnset_risk_v1 as v1
+from .config import CFG, override, HALF_THICK, ALPHA, T_GLASS, T_NF
+from .data import load_labeled, load_unlabeled, shot_table
+from .model import dev_scale, deviation, RiskModel
+from .pinn import PINN, WEIGHTS, T0, T1, LG
+from . import evaluate as st
 
-CFG = v0.CFG
+RUNNER = Path(__file__).resolve().parent.parent / "run_newrecipe.py"
 TV, GATE = CFG["TIER_VARS"], CFG["GATE_VARS"]
 LOTKEY = ["PART_FACT_PLAN_DATE", "PART_FACT_SERIAL", "PART_NAME"]
 FULL = ["Max_Injection_Speed", "Filling_Time", "Injection_Time", "FLR"]
@@ -66,10 +63,10 @@ def build_bank(U, min_rows=300):
         R = pd.concat([groups[k] for k in best[1]])
         med = R[TV].median(); sc = width(R, med, TV)            # 묶음 전체로 지문을 다시 잡고 1층을 다시 고름 (select_tier1과 같은 거리)
         d = np.sqrt((((L[TV] - med) / sc) ** 2).mean(axis=1)); mem = list(d.index[d <= CFG["TIER_DIST"]]) or best[1]
-        T1 = pd.concat([groups[k] for k in mem]); ST = v0.shot_table(T1)
+        T1 = pd.concat([groups[k] for k in mem]); ST = shot_table(T1)
         G = ST[GATE]; gmed = G.median()
         gsc = np.maximum(1.4826 * (G - gmed).abs().median(), np.maximum(0.01 * gmed.abs(), 0.5))
-        bank.append(dict(tier_med=med, tier_sc=sc, gmed=gmed, gsc=gsc, scale={c: v0.dev_scale(ST[c]) for c in CFG["VARS"]},
+        bank.append(dict(tier_med=med, tier_sc=sc, gmed=gmed, gsc=gsc, scale={c: dev_scale(ST[c]) for c in CFG["VARS"]},
                          lots=len(mem), rows=len(T1), shots=len(ST)))
         remaining = [k for k in remaining if k not in set(mem) | set(best[1])]
     return bank
@@ -93,31 +90,14 @@ def effective_recipe(r, held):
 
 
 def multi_deviation(S, bank):
-    """v0.deviation과 같은 계산. 다른 점: 샷마다 가장 가까운 레시피의 척도를 쓰고, 레시피가 바뀌면 작업오더가 바뀐 것처럼 기준을 새로 잡는다"""
-    V = CFG["VARS"]; X = S[V].values; r, gd = route(S, bank); held = gd > CFG["GATE_DIST"]
+    """model.deviation과 같은 계산. 다른 점: 샷마다 가장 가까운 레시피의 척도를 쓰고, 레시피가 바뀌면 작업오더가 바뀐 것처럼 기준을 새로 잡는다"""
+    r, gd = route(S, bank); held = gd > CFG["GATE_DIST"]
     r = effective_recipe(r, held)
     lot = (S.lot.astype(str) + "|" + pd.Series(r, index=S.index).astype(str)).values
-    ref = {c: [] for c in V}; D = np.full(len(S), np.nan); prev = None; run = []
-    for i in range(len(S)):
-        if lot[i] != prev: ref = {c: [] for c in V}; run = []
-        prev = lot[i]
-        if held[i]: continue
-        if len(ref[V[0]]) < CFG["REF_MIN"]:
-            for j, c in enumerate(V): ref[c].append(X[i, j])
-            continue
-        sc = bank[r[i]]["scale"]
-        z = [(X[i, j] - np.median(ref[c][-CFG["REF_WIN"]:])) / sc[c] for j, c in enumerate(V)]
-        D[i] = max(map(abs, z))
-        if D[i] < CFG["ALARM"]:
-            run = []
-            for j, c in enumerate(V): ref[c].append(X[i, j])
-        else:
-            run.append(i)
-            if len(run) >= CFG["REBASE_RUN"]: ref = {c: list(X[run, j]) for j, c in enumerate(V)}; run = []
-    return D, r, gd
+    return deviation(S, [bank[k]["scale"] for k in r], held, lots=lot), r, gd
 
 
-class MultiModel(v1.RiskModel):
+class MultiModel(RiskModel):
     """실시간 경로: RiskModel.step을 그대로 쓰되, 샷마다 가장 가까운 레시피의 기준으로 바꿔 끼운다"""
     def __init__(self, prod, bank):
         super().__init__(prod); self.bank = bank; self._use(0); self.cur = None
@@ -139,8 +119,7 @@ class MultiModel(v1.RiskModel):
 class PinnFLR:
     """학습된 PINN으로 샷마다 FLR: θ(x̂, t) = θ_nf인 x̂를 이분법으로 찾는다.
     수지·두께가 바뀌면 tg·tnf·half_mm·a_melt만 바꾼다(무차원 변환). 실험 4 가중치(입력 4개)는 ratio(α_유리/α_용융)도 넣는다"""
-    def __init__(self, path=HERE / "weights" / "pinn_exp2_map.npz", tg=105.0, tnf=110.0, half_mm=4.37 / 2, a_melt=0.080, ratio=None):
-        from pinn_map import PINN, T0, T1, LG
+    def __init__(self, path=WEIGHTS / "pinn_exp2_map.npz", tg=T_GLASS, tnf=T_NF, half_mm=HALF_THICK, a_melt=ALPHA, ratio=None):
         self.m = PINN(str(path)); self.tg, self.tnf, self.tref, self.ratio = tg, tnf, half_mm ** 2 / a_melt, ratio
         self.T0, self.T1, self.LG = T0, T1, LG
     def _theta(self, x, th, g):
@@ -169,36 +148,35 @@ class PinnFLR:
 
 
 # ================================================================ ③ 엄격 평가 비교 (변형 하나를 별도 프로세스로)
+def auto_reference(prod, trainS, U):
+    """auto: 라벨(trainS)은 쓰지 않고 무라벨 작업오더로 레시피 묶음을 등록한다"""
+    bank = build_bank(U)
+    if not bank: return None, dict(reason="no recipe cluster")
+    return MultiModel(prod, bank), dict(recipes=len(bank), recipe_Tm=[round(float(b["tier_med"]["Tm"]), 1) for b in bank])
+
+
+def auto_deviations(S, model, no_flr=False):
+    VARS = st.VARS
+    with override(VARS=[v for v in VARS if v != "FLR"] if no_flr else VARS):
+        return multi_deviation(S, model.bank)[0]
+
+
 def strict_variant(data, out, tag):
-    import pinnset_strict as st
     D = Path(data); O = Path(out) / "newrecipe" / tag; O.mkdir(parents=True, exist_ok=True)
-    st.DATA, st.RESULTS, st.OUT = D, O, O
-    st.log = lambda s: None
     info = {}
-    if "pinn" in tag:
-        PF = PinnFLR(); orig = v0.add_derived
-        def add_derived(df):
-            df = orig(df); f = PF(df.Tw.values, df.Tm.values, df.Filling_Time.clip(lower=1e-3).values)
+    L, U = load_labeled(str(D)), load_unlabeled(str(D)); R = dict(info=info)
+    if "pinn" in tag:                                        # FLR을 해석식 대신 PINN으로 (학습 범위 밖 행은 해석식 유지)
+        PF = PinnFLR()
+        def pinn_flr(df):
+            df = df.copy(); f = PF(df.Tw.values, df.Tm.values, df.Filling_Time.clip(lower=1e-3).values)
             ok = np.isfinite(f); info.setdefault("PINN_FLR_행", []).append([int(ok.sum()), len(df)])
             df.loc[ok, "FLR"] = f[ok]; return df
-        v0.add_derived = add_derived
-    if "auto" in tag:
-        orig_dev = st.deviations
-        def dev(S, model, no_flr=False):
-            if hasattr(model, "bank"):
-                with st.variables(no_flr): return multi_deviation(S, model.bank)[0]
-            return orig_dev(S, model, no_flr)
-        st.deviations = dev
-        def fit_reference(prod, trainS, U):                  # trainS(라벨)는 쓰지 않는다
-            bank = build_bank(U)
-            if not bank: return None, dict(reason="no recipe cluster")
-            return MultiModel(prod, bank), dict(recipes=len(bank), recipe_Tm=[round(float(b["tier_med"]["Tm"]), 1) for b in bank])
-        st.fit_reference = fit_reference
-    L, U = v0.load_labeled(str(D)), v0.load_unlabeled(str(D)); R = dict(info=info)
+        L, U = pinn_flr(L), pinn_flr(U)
+    fit_ref, devs = (auto_reference, auto_deviations) if "auto" in tag else (None, None)
     for prod in CFG["PRODUCTS"]:
         parts = L[L.PART_NAME.str.startswith(prod)].copy()
         for mode in ["forward", "leave_block_out"]:
-            E, folds, pa = st.evaluate_product(prod, parts, U, mode)
+            E, folds, pa = st.evaluate_product(prod, parts, U, mode, O, fit_ref, devs, log=lambda s: None)
             rows, ops, evs, cis = st.performance(E, prod, mode)
             pin = [r for r in rows if r["model"] == "PINNSET"][0]; op = {o["population"]: o for o in ops}
             sc = E.status.eq("score")
@@ -212,15 +190,14 @@ def strict_variant(data, out, tag):
 
 # ================================================================ ④ 무라벨 전체 설비·품목
 def onboarding(data, mode="frozen", min_shots=2000):
-    U = v0.load_unlabeled(str(data)); rows = []
-    try:
-        for (eq, item), u in U.groupby(["EQUIP_NAME", "PART_NAME"]):
-            u = u.drop_duplicates(["TimeStamp", "PART_NAME"]).sort_values("TimeStamp")
-            if len(u) < min_shots: continue
-            cut = u.TimeStamp.quantile(0.5); tr, te = u[u.TimeStamp < cut], u[u.TimeStamp >= cut]
-            lab = item.startswith(tuple(CFG["PRODUCTS"])) and eq == CFG["EQUIP"]
-            CFG["VARS"] = FULL if lab else FULL[:3]
-            S = v0.shot_table(te)
+    U = load_unlabeled(str(data)); rows = []
+    for (eq, item), u in U.groupby(["EQUIP_NAME", "PART_NAME"]):
+        u = u.drop_duplicates(["TimeStamp", "PART_NAME"]).sort_values("TimeStamp")
+        if len(u) < min_shots: continue
+        cut = u.TimeStamp.quantile(0.5); tr, te = u[u.TimeStamp < cut], u[u.TimeStamp >= cut]
+        lab = item.startswith(tuple(CFG["PRODUCTS"])) and eq == CFG["EQUIP"]
+        with override(VARS=FULL if lab else FULL[:3]):     # 두께·수지를 모르는 품목은 FLR 빼고 3변수
+            S = shot_table(te)
             if mode == "daily":                                # 매일 0시에 그때까지의 기록으로 다시 등록
                 parts, nb = [], []
                 for day, s_ in S.groupby(S.TimeStamp.dt.normalize(), sort=True):
@@ -242,8 +219,6 @@ def onboarding(data, mode="frozen", min_shots=2000):
                              정상운전_경보율=float((D[steady] >= CFG["ALARM"]).mean()) if steady.any() else np.nan,
                              재가동3샷_경보율=float((D[first] >= CFG["ALARM"]).mean()) if first.any() else np.nan,
                              정상운전샷=int(steady.sum()), 재가동샷=int(first.sum())))
-    finally:
-        CFG["VARS"] = FULL
     T = pd.DataFrame(rows); ok = T.dropna(subset=["정상운전_경보율"])
     summ = dict(방식=mode, 품목=len(T), 평가품목=len(ok), 설비=int(ok.설비.nunique()), 등록레시피합=int(ok.레시피.sum()),
                 판정률_중앙=float(ok.판정률.median()), 판정률_샷가중=float(np.average(ok.판정률, weights=ok.시험샷)),
@@ -281,6 +256,7 @@ def new_resin_check():
 
 # ================================================================ 실행
 def main():
+    """run_newrecipe.py에서 호출. --variant는 내부용(엄격 평가 변형 하나를 별도 프로세스로)"""
     ap = argparse.ArgumentParser(); ap.add_argument("--data", required=True); ap.add_argument("--out", default="results")
     ap.add_argument("--fast", action="store_true", help="엄격 평가는 official, pinn_auto 두 가지만")
     ap.add_argument("--variant", default=None, help=argparse.SUPPRESS)
@@ -291,7 +267,7 @@ def main():
     tags = ["official", "pinn_auto"] if a.fast else ["official", "auto", "pinn", "pinn_auto"]
     print(f"[2/4] 엄격 평가 비교 {tags} (변형마다 별도 프로세스)", flush=True)
     for i in range(0, len(tags), 2):                       # 메모리를 아끼려고 두 개씩
-        procs = [subprocess.Popen([sys.executable, __file__, "--data", a.data, "--out", a.out, "--variant", t]) for t in tags[i:i + 2]]
+        procs = [subprocess.Popen([sys.executable, str(RUNNER), "--data", a.data, "--out", a.out, "--variant", t]) for t in tags[i:i + 2]]
         for p in procs:
             if p.wait() != 0: raise SystemExit(f"엄격 평가 변형 실패: {p.args[-1]}")
     R["엄격평가"] = {t: json.load(open(O / t / "summary.json", encoding="utf-8")) for t in tags}
@@ -302,7 +278,3 @@ def main():
     R["소요초"] = time.time() - t0
     json.dump(R, open(O / "newrecipe_results.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=float)
     print(f"완료 {R['소요초']:.0f}초 → {O / 'newrecipe_results.json'}")
-
-
-if __name__ == "__main__":
-    main()

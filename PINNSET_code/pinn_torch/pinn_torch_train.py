@@ -12,7 +12,7 @@ PINNSET PINN 실험 1·2·3·3b·4 — PyTorch 학습 스크립트
   python pinn_torch_train.py --exp 4 --out weights_torch --device cuda   # 실험 4: 수지 일반화 지도 (GPU 권장, CPU 약 40~60분)
 
 산출물 (--out 폴더)
-  pinn_exp1_const.npz, pinn_exp2_map.npz   : 키 W0~W3, b0~b3, Wo, bo (float64) → weights/pinn_map.py와 제출 파이프라인이 읽음
+  pinn_exp1_const.npz, pinn_exp2_map.npz   : 키 W0~W3, b0~b3, Wo, bo (float64) → pinnset/pinn.py와 제출 파이프라인이 읽음
   pinn_exp3_bi.npz, pinn_exp3b_bi.npz       : 실험 3·3b 가중치 + 역산한 log(Bi)
   pinn_exp4_resin.npz                       : 실험 4 가중치 (입력 4개: 위치, 시간, 유리전이 위치 θg, 열확산율 비 r)
   P1.pkl, P2.pkl, R3.pkl, R3b.pkl           : 그림 스크립트 fig1~3.py 입력
@@ -242,7 +242,7 @@ def exp4(out, iters=20001, log=print, device="cpu", width=48, depth=4, n_col=400
 ANCHORS = [(1, 22.8, 4.45, 0.1722), (2, 22.8, 4.45, 0.1763), (2, 50.0, 4.45, 0.1322), (2, 80.0, 8.0, 0.1012)]   # 제출 가중치 기록값 (2026-10-06 학습)
 
 def _pinn_cls():
-    sys.path.insert(0, str(HERE.parent / "weights")); from pinn_map import PINN; return PINN
+    sys.path.insert(0, str(HERE.parent)); from pinnset.pinn import PINN; return PINN
 
 REQUIRED = {"1": "pinn_exp1_const.npz", "2": "pinn_exp2_map.npz", "3": "pinn_exp3_bi.npz", "3b": "pinn_exp3b_bi.npz", "4": "pinn_exp4_resin.npz"}
 
