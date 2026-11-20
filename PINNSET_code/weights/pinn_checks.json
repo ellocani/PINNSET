@@ -1,0 +1,80 @@
+{
+  "passed": true,
+  "archived_anchor_checks": [
+    {
+      "experiment": 1,
+      "mold_c": 22.8,
+      "fill_s": 4.45,
+      "expected_rounded": 0.1722,
+      "actual": 0.17218825147506436,
+      "passed": true
+    },
+    {
+      "experiment": 2,
+      "mold_c": 22.8,
+      "fill_s": 4.45,
+      "expected_rounded": 0.1763,
+      "actual": 0.17630105006741467,
+      "passed": true
+    },
+    {
+      "experiment": 2,
+      "mold_c": 50,
+      "fill_s": 4.45,
+      "expected_rounded": 0.1322,
+      "actual": 0.1322346753990643,
+      "passed": true
+    },
+    {
+      "experiment": 2,
+      "mold_c": 80,
+      "fill_s": 8,
+      "expected_rounded": 0.1012,
+      "actual": 0.10124932270174027,
+      "passed": true
+    }
+  ],
+  "constant_diffusivity_fourier_checks": [
+    {
+      "time_s": 1.5,
+      "analytic_flr": 0.10020583663245144,
+      "pinn_flr": 0.10154249832035178,
+      "absolute_error": 0.0013366616879003368,
+      "relative_error": 0.013339160001259466
+    },
+    {
+      "time_s": 4.45,
+      "analytic_flr": 0.1725955489928209,
+      "pinn_flr": 0.17218825147506436,
+      "absolute_error": 0.000407297517756533,
+      "relative_error": 0.002359837899258193
+    },
+    {
+      "time_s": 8.0,
+      "analytic_flr": 0.23186129977428666,
+      "pinn_flr": 0.23411077541484593,
+      "absolute_error": 0.002249475640559273,
+      "relative_error": 0.009701815881947969
+    },
+    {
+      "time_s": 11.2,
+      "analytic_flr": 0.2778405218714876,
+      "pinn_flr": 0.2860558825992881,
+      "absolute_error": 0.008215360727800491,
+      "relative_error": 0.029568619697599132
+    },
+    {
+      "time_s": 37.8,
+      "analytic_flr": 1.0,
+      "pinn_flr": 1.0,
+      "absolute_error": 0.0,
+      "relative_error": 0.0
+    }
+  ],
+  "domain_guards": {
+    "time_below_training_range": true,
+    "theta_g_outside_training_range": true
+  },
+  "weights_source": "PyTorch 2.11 float64 training (pinn_torch/pinn_torch_train.py); full training/verification record in weights/학습기록/",
+  "limitation": "Pass refers to recorded anchor values and input-domain guards. Fourier comparisons report observed errors without asserting a global error threshold. Nonlinear FDM comparison (15 conditions) is in weights/학습기록/verify_report_exp1_2.json."
+}

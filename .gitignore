@@ -1,0 +1,13 @@
+/data/
+**/labeled_data.csv
+**/unlabeled_data.csv
+**/Dataset_Molding.zip
+__pycache__/
+*.py[cod]
+.venv/
+.env
+/PINNSET_code/results/
+/PINNSET_code/results_*/
+/PINNSET_code/pinnset_output/
+/PINNSET_code/weights_torch/
+/PINNSET_code/weights_smoke/
